@@ -4,7 +4,7 @@ import re
 import shutil
 import tempfile
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import boto3
@@ -23,7 +23,7 @@ def clean_env(name, default=''):
     return value
 
 
-def normalize_endpoint(raw=None):
+def normalize_endpoint():
     endpoint = clean_env('STORAGE_ENDPOINT')
     if not endpoint:
         raise RuntimeError('STORAGE_ENDPOINT is missing')
@@ -45,21 +45,7 @@ def normalize_endpoint(raw=None):
 
 
 def client():
-    endpoint = normalize_endpoint()
-    return boto3.client(
-        's3',
-        endpoint_url=endpoint,
-        aws_access_key_id=clean_env('STORAGE_ACCESS_KEY'),
-        aws_secret_access_key=clean_env('STORAGE_SECRET_KEY'),
-        region_name=clean_env('STORAGE_REGION', 'auto') or 'auto',
-        config=Config(
-            signature_version='s3v4',
-            s3={'addressing_style': 'path'},
-            connect_timeout=10,
-            read_timeout=60,
-            retries={'max_attempts': 3},
-        ),
-    )
+    return boto3.client('s3', endpoint_url=normalize_endpoint(), aws_access_key_id=clean_env('STORAGE_ACCESS_KEY'), aws_secret_access_key=clean_env('STORAGE_SECRET_KEY'), region_name=clean_env('STORAGE_REGION', 'auto') or 'auto', config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}, connect_timeout=10, read_timeout=60, retries={'max_attempts': 3}))
 
 
 S3 = client()
@@ -73,34 +59,37 @@ def read_job(key):
 
 def write_job(job):
     job['updatedAt'] = now()
-    S3.put_object(
-        Bucket=BUCKET,
-        Key=f"jobs/{job['id']}.json",
-        Body=json.dumps(job, ensure_ascii=False).encode('utf-8'),
-        ContentType='application/json',
-        CacheControl='no-store',
-    )
+    S3.put_object(Bucket=BUCKET, Key=f"jobs/{job['id']}.json", Body=json.dumps(job, ensure_ascii=False).encode('utf-8'), ContentType='application/json', CacheControl='no-store')
+
+
+def _stale_running(job):
+    if job.get('status') != 'RUNNING':
+        return False
+    raw = job.get('updatedAt') or job.get('createdAt')
+    try:
+        stamp = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        return datetime.now(timezone.utc) - stamp > timedelta(hours=8)
+    except Exception:
+        return False
 
 
 def queued_jobs():
-    items = []
-    token = None
+    items, token = [], None
     while True:
         kwargs = {'Bucket': BUCKET, 'Prefix': 'jobs/'}
-        if token:
-            kwargs['ContinuationToken'] = token
+        if token: kwargs['ContinuationToken'] = token
         page = S3.list_objects_v2(**kwargs)
         for obj in page.get('Contents', []):
             key = obj['Key']
-            if key.endswith('.json'):
-                try:
-                    job = read_job(key)
-                    if job.get('status') == 'QUEUED':
-                        items.append((job.get('createdAt', ''), key, job))
-                except Exception as exc:
-                    print(f'Ignoring invalid job {key}: {exc}')
-        if not page.get('IsTruncated'):
-            break
+            if not key.endswith('.json'): continue
+            try:
+                job = read_job(key)
+                if _stale_running(job):
+                    job['status'] = 'QUEUED'; job['requeuedAt'] = now(); write_job(job)
+                if job.get('status') == 'QUEUED': items.append((job.get('createdAt', ''), key, job))
+            except Exception as exc:
+                print(f'Ignoring invalid job {key}: {exc}')
+        if not page.get('IsTruncated'): break
         token = page.get('NextContinuationToken')
     items.sort(key=lambda x: x[0])
     return items
@@ -108,58 +97,29 @@ def queued_jobs():
 
 def process(job):
     work = tempfile.mkdtemp(prefix=f"editia-{job['id']}-")
-    reference = os.path.join(work, 'reference.mp4')
-    source = os.path.join(work, 'source.mp4')
-    output = os.path.join(work, 'output.mp4')
+    reference, source, output = [os.path.join(work, name) for name in ('reference.mp4', 'source.mp4', 'output.mp4')]
     try:
-        job['status'] = 'RUNNING'
-        write_job(job)
-        print(f"Processing {job['id']}")
-
+        job['status'] = 'RUNNING'; write_job(job); print(f"Processing {job['id']}")
         S3.download_file(BUCKET, job['reference'], reference)
         S3.download_file(BUCKET, job['source'], source)
-
         result = run(reference, source, output)
         output_key = f"outputs/{job['id']}.mp4"
         S3.upload_file(output, BUCKET, output_key, ExtraArgs={'ContentType': 'video/mp4'})
-        output_url = S3.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': BUCKET, 'Key': output_key},
-            ExpiresIn=86400,
-        )
-
-        job.update({
-            'status': 'COMPLETED',
-            'output': output_url,
-            'outputKey': output_key,
-            'qc': result.get('qc'),
-            'spec': result.get('spec'),
-            'finishedAt': now(),
-        })
-        write_job(job)
-        print(f"Completed {job['id']}")
+        output_url = S3.generate_presigned_url('get_object', Params={'Bucket': BUCKET, 'Key': output_key}, ExpiresIn=86400)
+        job.update({'status': 'COMPLETED', 'output': output_url, 'outputKey': output_key, 'qc': result.get('qc'), 'spec': result.get('spec'), 'finishedAt': now()})
+        write_job(job); print(f"Completed {job['id']}")
     except Exception as exc:
-        job.update({
-            'status': 'FAILED',
-            'error': str(exc),
-            'traceback': traceback.format_exc()[-12000:],
-            'finishedAt': now(),
-        })
-        try:
-            write_job(job)
-        except Exception:
-            print(traceback.format_exc())
+        job.update({'status': 'FAILED', 'error': str(exc), 'traceback': traceback.format_exc()[-12000:], 'finishedAt': now()})
+        try: write_job(job)
+        except Exception: print(traceback.format_exc())
         print(f"Failed {job['id']}: {exc}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
-    jobs = queued_jobs()
-    print(f'Found {len(jobs)} queued job(s)')
-    for _, _, job in jobs:
-        process(job)
+    jobs = queued_jobs(); print(f'Found {len(jobs)} queued job(s)')
+    for _, _, job in jobs: process(job)
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__': main()

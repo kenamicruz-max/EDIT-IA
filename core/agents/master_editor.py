@@ -1,23 +1,39 @@
 def _mean_features(samples, start, end):
     xs = [s for s in samples if start <= s.get('t', 0) <= end]
-    if not xs: return {'motion': 0.0, 'brightness': 0.0, 'saturation': 0.0, 'contrast': 0.0}
+    if not xs:
+        return {'motion': 0.0, 'brightness': 0.0, 'saturation': 0.0, 'contrast': 0.0}
     return {k: sum(float(s.get(k, 0)) for s in xs) / len(xs) for k in ('motion', 'brightness', 'saturation', 'contrast')}
+
+
+def _snap_to_beat(time, beats, tolerance=0.12):
+    if not beats:
+        return time
+    nearest = min(beats, key=lambda b: abs(float(b) - time))
+    return float(nearest) if abs(float(nearest) - time) <= tolerance else time
 
 
 def build(reference_analysis, source_analysis):
     video = reference_analysis.get('video', {})
+    audio = reference_analysis.get('audio', {})
+    beats = [float(x) for x in audio.get('beats', [])]
     cuts = sorted(set([0.0] + [float(x) for x in video.get('cuts', []) if float(x) > 0]))
     refdur = float(video.get('duration', 0) or 0)
-    if refdur > 0 and (not cuts or cuts[-1] < refdur - 0.05): cuts.append(refdur)
-    cuts = [x for x in cuts if 0 <= x <= refdur]
+    snapped = [0.0]
+    for cut in cuts[1:]:
+        if cut < refdur - 0.05:
+            snapped.append(_snap_to_beat(cut, beats))
+    if refdur > 0:
+        snapped.append(refdur)
+    cuts = sorted(set(round(max(0.0, min(refdur, x)), 4) for x in snapped))
     samples = video.get('samples', [])
     segments = []
     for i in range(len(cuts) - 1):
         start, end = cuts[i], cuts[i + 1]
-        if end <= start: continue
+        if end <= start:
+            continue
         f = _mean_features(samples, start, end)
         segments.append({'start': start, 'end': end, 'duration': end - start, 'features': f, 'brightness': f['brightness'], 'saturation': f['saturation'], 'contrast': f['contrast'], 'motion': f['motion'], 'brightness_delta': 0.0, 'saturation_multiplier': 1.0, 'contrast_multiplier': 1.0, 'speed': 1.0})
-    return {'version': '1.1', 'duration': refdur, 'segments': segments, 'reference_grade': reference_analysis.get('color', {}), 'audio': reference_analysis.get('audio', {})}
+    return {'version': '1.2', 'duration': refdur, 'segments': segments, 'reference_grade': reference_analysis.get('color', {}), 'audio': audio, 'source_duration': source_analysis.get('video', {}).get('duration', 0)}
 
 
 def adapt(spec, source_analysis, matches):
