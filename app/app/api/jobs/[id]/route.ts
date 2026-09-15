@@ -1,14 +1,2 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-
-const ROOT = path.join(process.cwd(), 'runtime-jobs');
-
-export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const id = params.id;
-  const dir = path.join(ROOT, id);
-  const statusPath = path.join(dir, 'status.json');
-  if (!fs.existsSync(statusPath)) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
-  const status = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
-  return NextResponse.json(status);
-}
+export async function GET(_:Request,{params}:{params:{id:string}}){try{const key=process.env.RUNPOD_API_KEY,endpoint=process.env.RUNPOD_ENDPOINT_ID;if(!key||!endpoint)return NextResponse.json({error:'RunPod is not configured'},{status:500});const r=await fetch(`https://api.runpod.ai/v2/${endpoint}/status/${params.id}`,{headers:{authorization:`Bearer ${key}`},cache:'no-store'});const d=await r.json();if(!r.ok)return NextResponse.json({error:d?.error||'Status lookup failed'},{status:502});const x=d?.output||{};return NextResponse.json({id:params.id,status:d.status||'IN_QUEUE',output:x.output,qc:x.qc,spec:x.spec,error:x.error});}catch(e){return NextResponse.json({error:e instanceof Error?e.message:'Status lookup failed'},{status:500});}}
