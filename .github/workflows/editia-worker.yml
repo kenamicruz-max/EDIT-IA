@@ -49,6 +49,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import re
           from urllib.parse import urlparse
           import boto3
           from botocore.config import Config
@@ -74,10 +75,19 @@ jobs:
           if not endpoint.startswith(('https://', 'http://')):
               endpoint = 'https://' + endpoint
           parsed = urlparse(endpoint)
-          if not parsed.netloc or '<' in endpoint or '>' in endpoint:
-              raise RuntimeError('STORAGE_ENDPOINT is not a valid URL. It must be https://<ACCOUNT_ID>.r2.cloudflarestorage.com')
-          endpoint = endpoint.rstrip('/')
-          print('R2 endpoint format: OK')
+          hostname = (parsed.hostname or '').strip().lower().rstrip('.')
+          if not hostname:
+              raise RuntimeError('STORAGE_ENDPOINT is not a valid URL')
+          if '<' in hostname or '>' in hostname:
+              raise RuntimeError('STORAGE_ENDPOINT contains a placeholder; use the real Cloudflare R2 endpoint')
+          if not hostname.endswith('.r2.cloudflarestorage.com'):
+              match = re.search(r'([a-z0-9-]+\.r2\.cloudflarestorage\.com)', hostname)
+              if match:
+                  hostname = match.group(1)
+              else:
+                  raise RuntimeError('STORAGE_ENDPOINT must use the Cloudflare R2 host ending in .r2.cloudflarestorage.com')
+          endpoint = f'https://{hostname}'
+          print('R2 endpoint normalized: OK')
           s3 = boto3.client('s3', endpoint_url=endpoint, aws_access_key_id=access, aws_secret_access_key=secret, region_name=region, config=Config(connect_timeout=10, read_timeout=30, retries={'max_attempts': 3}))
           try:
               s3.head_bucket(Bucket=bucket)
