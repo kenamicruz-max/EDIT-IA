@@ -50,6 +50,7 @@ jobs:
           python - <<'PY'
           import os
           import re
+          import hashlib
           from urllib.parse import urlparse
           import boto3
           from botocore.config import Config
@@ -65,16 +66,11 @@ jobs:
           region = clean('STORAGE_REGION', 'auto') or 'auto'
           access = clean('STORAGE_ACCESS_KEY')
           secret = clean('STORAGE_SECRET_KEY')
-          required = {
-              'STORAGE_ENDPOINT': endpoint,
-              'STORAGE_BUCKET': bucket,
-              'STORAGE_ACCESS_KEY': access,
-              'STORAGE_SECRET_KEY': secret,
-              'STORAGE_REGION': region,
-          }
+          required = {'STORAGE_ENDPOINT': endpoint, 'STORAGE_BUCKET': bucket, 'STORAGE_ACCESS_KEY': access, 'STORAGE_SECRET_KEY': secret, 'STORAGE_REGION': region}
           missing = [k for k, v in required.items() if not v]
           print('R2 endpoint configured:', bool(endpoint))
           print('R2 bucket configured:', bool(bucket))
+          print('R2 bucket fingerprint:', hashlib.sha256(bucket.encode()).hexdigest() if bucket else 'missing')
           print('R2 credentials configured:', bool(access) and bool(secret))
           print('R2 region configured:', region)
           if missing:
@@ -98,20 +94,7 @@ jobs:
           endpoint = f'https://{hostname}'
           print('R2 endpoint normalized: OK')
 
-          s3 = boto3.client(
-              's3',
-              endpoint_url=endpoint,
-              aws_access_key_id=access,
-              aws_secret_access_key=secret,
-              region_name=region,
-              config=Config(
-                  signature_version='s3v4',
-                  s3={'addressing_style': 'path'},
-                  connect_timeout=10,
-                  read_timeout=30,
-                  retries={'max_attempts': 3},
-              ),
-          )
+          s3 = boto3.client('s3', endpoint_url=endpoint, aws_access_key_id=access, aws_secret_access_key=secret, region_name=region, config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}, connect_timeout=10, read_timeout=30, retries={'max_attempts': 3}))
           try:
               response = s3.list_objects_v2(Bucket=bucket, Prefix='jobs/', MaxKeys=1)
               print('R2 connection: OK')
