@@ -21,7 +21,7 @@ export async function GET() {
     {
       ok: allConfigured,
       configured,
-      version: '5.2.1',
+      version: '5.2.2',
     },
     {
       headers: { 'Cache-Control': 'no-store, max-age=0' },
