@@ -1,0 +1,58 @@
+name: EDIT-IA CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libgl1 libglib2.0-0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: worker/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r worker/requirements.txt
+
+      - name: Compile Python sources
+        run: python -m compileall -q core worker
+
+      - name: Run sanity check
+        run: python core/sanity_check.py
+
+      - name: End-to-end render smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/editia-smoke
+          ffmpeg -y -v error -f lavfi -i "testsrc2=size=320x180:rate=30" -f lavfi -i "sine=frequency=440:sample_rate=8000" -t 3 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/editia-smoke/reference.mp4
+          ffmpeg -y -v error -f lavfi -i "testsrc2=size=320x180:rate=30" -f lavfi -i "sine=frequency=660:sample_rate=8000" -t 4 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/editia-smoke/source.mp4
+          python - <<'PY'
+          from core.orchestrator.pipeline import run
+          result = run('/tmp/editia-smoke/reference.mp4', '/tmp/editia-smoke/source.mp4', '/tmp/editia-smoke/output.mp4')
+          assert result.get('qc') is not None, result
+          assert result.get('output') == '/tmp/editia-smoke/output.mp4', result
+          print('Smoke QC:', result['qc'])
+          PY
+          test -s /tmp/editia-smoke/output.mp4
+          ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1 /tmp/editia-smoke/output.mp4
+          ffprobe -v error -show_entries format=duration -of default=nw=1 /tmp/editia-smoke/output.mp4
