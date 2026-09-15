@@ -23,7 +23,7 @@ def clean_env(name, default=''):
     return value
 
 
-def normalize_endpoint(raw):
+def normalize_endpoint(raw=None):
     endpoint = clean_env('STORAGE_ENDPOINT')
     if not endpoint:
         raise RuntimeError('STORAGE_ENDPOINT is missing')
@@ -45,14 +45,20 @@ def normalize_endpoint(raw):
 
 
 def client():
-    endpoint = normalize_endpoint(clean_env('STORAGE_ENDPOINT'))
+    endpoint = normalize_endpoint()
     return boto3.client(
         's3',
         endpoint_url=endpoint,
         aws_access_key_id=clean_env('STORAGE_ACCESS_KEY'),
         aws_secret_access_key=clean_env('STORAGE_SECRET_KEY'),
         region_name=clean_env('STORAGE_REGION', 'auto') or 'auto',
-        config=Config(connect_timeout=10, read_timeout=60, retries={'max_attempts': 3}),
+        config=Config(
+            signature_version='s3v4',
+            s3={'addressing_style': 'path'},
+            connect_timeout=10,
+            read_timeout=60,
+            retries={'max_attempts': 3},
+        ),
     )
 
 
