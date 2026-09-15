@@ -1,0 +1,41 @@
+name: Production smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wait for Vercel production deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 18); do
+            echo "Checking production health (attempt $i/18)..."
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 https://edit-ia-phi.vercel.app/api/health || true)
+            echo "HTTP $code"
+            cat /tmp/health.json 2>/dev/null || true
+            echo
+            if [ "$code" = "200" ]; then
+              python - <<'PY'
+          import json
+          p=json.load(open('/tmp/health.json'))
+          print('Production health:', p)
+          if not p.get('ok'):
+              raise SystemExit('Production /api/health reports unhealthy configuration')
+          if p.get('version') != '5.2.3':
+              raise SystemExit(f"Production version mismatch: {p.get('version')}")
+          PY
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'Production health endpoint never became healthy.'
+          exit 1
