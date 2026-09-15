@@ -1,2 +1,46 @@
 import { NextResponse } from 'next/server';
-export async function GET(_:Request,{params}:{params:{id:string}}){try{const key=process.env.RUNPOD_API_KEY,endpoint=process.env.RUNPOD_ENDPOINT_ID;if(!key||!endpoint)return NextResponse.json({error:'RunPod is not configured'},{status:500});const r=await fetch(`https://api.runpod.ai/v2/${endpoint}/status/${params.id}`,{headers:{authorization:`Bearer ${key}`},cache:'no-store'});const d=await r.json();if(!r.ok)return NextResponse.json({error:d?.error||'Status lookup failed'},{status:502});const x=d?.output||{};return NextResponse.json({id:params.id,status:d.status||'IN_QUEUE',output:x.output,qc:x.qc,spec:x.spec,error:x.error});}catch(e){return NextResponse.json({error:e instanceof Error?e.message:'Status lookup failed'},{status:500});}}
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+
+function storage() {
+  const bucket = process.env.STORAGE_BUCKET;
+  if (!bucket) throw new Error('STORAGE_BUCKET is not configured');
+  return {
+    bucket,
+    client: new S3Client({
+      region: process.env.STORAGE_REGION || 'auto',
+      endpoint: process.env.STORAGE_ENDPOINT || undefined,
+      credentials: {
+        accessKeyId: process.env.STORAGE_ACCESS_KEY || '',
+        secretAccessKey: process.env.STORAGE_SECRET_KEY || ''
+      }
+    })
+  };
+}
+
+export async function GET(_: Request, { params }: { params: { id: string } }) {
+  try {
+    const { bucket, client } = storage();
+    const key = `jobs/${params.id}.json`;
+    const r = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const text = await r.Body?.transformToString();
+    if (!text) return NextResponse.json({ error: 'Job state is empty' }, { status: 502 });
+    const d = JSON.parse(text);
+    return NextResponse.json({
+      id: d.id,
+      status: d.status || 'QUEUED',
+      output: d.output || null,
+      outputKey: d.outputKey || null,
+      qc: d.qc || null,
+      spec: d.spec || null,
+      error: d.error || null,
+      createdAt: d.createdAt || null,
+      updatedAt: d.updatedAt || null
+    }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Status lookup failed';
+    if (/NoSuchKey|NotFound|404/i.test(message)) {
+      return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
