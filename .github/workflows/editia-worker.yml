@@ -65,11 +65,18 @@ jobs:
           region = clean('STORAGE_REGION', 'auto') or 'auto'
           access = clean('STORAGE_ACCESS_KEY')
           secret = clean('STORAGE_SECRET_KEY')
-          required = {'STORAGE_ENDPOINT': endpoint, 'STORAGE_BUCKET': bucket, 'STORAGE_ACCESS_KEY': access, 'STORAGE_SECRET_KEY': secret, 'STORAGE_REGION': region}
+          required = {
+              'STORAGE_ENDPOINT': endpoint,
+              'STORAGE_BUCKET': bucket,
+              'STORAGE_ACCESS_KEY': access,
+              'STORAGE_SECRET_KEY': secret,
+              'STORAGE_REGION': region,
+          }
           missing = [k for k, v in required.items() if not v]
           print('R2 endpoint configured:', bool(endpoint))
           print('R2 bucket configured:', bool(bucket))
           print('R2 credentials configured:', bool(access) and bool(secret))
+          print('R2 region configured:', region)
           if missing:
               raise RuntimeError('Missing GitHub Actions secret(s): ' + ', '.join(missing))
           if not endpoint.startswith(('https://', 'http://')):
@@ -88,13 +95,31 @@ jobs:
                   raise RuntimeError('STORAGE_ENDPOINT must use the Cloudflare R2 host ending in .r2.cloudflarestorage.com')
           endpoint = f'https://{hostname}'
           print('R2 endpoint normalized: OK')
-          s3 = boto3.client('s3', endpoint_url=endpoint, aws_access_key_id=access, aws_secret_access_key=secret, region_name=region, config=Config(connect_timeout=10, read_timeout=30, retries={'max_attempts': 3}))
+
+          # R2 supports HeadBucket, but an object-scoped R2 token is more reliably
+          # verified through the same ListObjectsV2 operation used by the worker.
+          # Explicit SigV4 also avoids SDKs selecting an AWS default signing mode.
+          s3 = boto3.client(
+              's3',
+              endpoint_url=endpoint,
+              aws_access_key_id=access,
+              aws_secret_access_key=secret,
+              region_name=region,
+              config=Config(
+                  signature_version='s3v4',
+                  s3={'addressing_style': 'path'},
+                  connect_timeout=10,
+                  read_timeout=30,
+                  retries={'max_attempts': 3},
+              ),
+          )
           try:
-              s3.head_bucket(Bucket=bucket)
+              response = s3.list_objects_v2(Bucket=bucket, Prefix='jobs/', MaxKeys=1)
+              print('R2 connection: OK')
+              print('R2 queue objects visible:', len(response.get('Contents', [])))
           except Exception as exc:
               print('R2 connection failed:', type(exc).__name__, str(exc))
               raise
-          print('R2 connection: OK')
           PY
 
       - name: Process queued EDIT-IA jobs
