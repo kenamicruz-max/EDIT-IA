@@ -1,83 +1,70 @@
 'use client';
+
 import { useState } from 'react';
 
-async function upload(f: File) {
-  const a = await fetch('/api/upload', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name: f.name, size: f.size, type: f.type })
-  });
-  const j = await a.json();
-  if (!a.ok) throw new Error(j.error || 'Upload setup failed');
-  const r = await fetch(j.url, {
-    method: 'PUT',
-    headers: { 'content-type': f.type || 'video/mp4' },
-    body: f
-  });
-  if (!r.ok) throw new Error('Video upload failed');
-  return j.key;
+const MAX = 500 * 1024 * 1024;
+function sizeLabel(size: number) { return `${(size / 1024 / 1024).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`; }
+
+async function upload(file: File) {
+  if (file.type !== 'video/mp4' && !file.name.toLowerCase().endsWith('.mp4')) throw new Error('Use arquivos MP4.');
+  if (!file.size || file.size > MAX) throw new Error('Cada vídeo deve ter no máximo 500 MB.');
+  const response = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: file.name, size: file.size, type: 'video/mp4' }) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Não foi possível preparar o upload.');
+  const put = await fetch(data.url, { method: 'PUT', headers: { 'content-type': 'video/mp4' }, body: file });
+  if (!put.ok) throw new Error(`Falha no upload de ${file.name}.`);
+  return data.key as string;
 }
 
 export default function Page() {
-  const [a, setA] = useState<File | null>(null);
-  const [b, setB] = useState<File | null>(null);
-  const [status, setStatus] = useState('Pronto para criar o edit.');
+  const [reference, setReference] = useState<File | null>(null);
+  const [source, setSource] = useState<File | null>(null);
+  const [status, setStatus] = useState('Selecione os dois vídeos para começar.');
   const [output, setOutput] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState('');
 
   async function create() {
-    if (!a || !b) return;
-    setBusy(true);
-    setOutput(null);
+    if (!reference || !source || busy) return;
+    setBusy(true); setError(''); setOutput(null); setProgress(8);
     try {
-      setStatus('Enviando vídeos para armazenamento seguro...');
-      const [ak, bk] = await Promise.all([upload(a), upload(b)]);
-
-      setStatus('Job colocado na fila gratuita do EDIT-IA...');
-      const r = await fetch('/api/jobs', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reference: ak, source: bk, referenceSize: a.size, sourceSize: b.size })
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Erro ao criar job');
-
-      setStatus(`Job ${j.id}\nAguardando o worker...`);
-      for (let i = 0; i < 2160; i++) {
-        await new Promise(x => setTimeout(x, 5000));
-        const s = await fetch(`/api/jobs/${j.id}`, { cache: 'no-store' });
-        if (!s.ok) continue;
-        const d = await s.json();
-        setStatus(`Job ${j.id}\nStatus: ${d.status}`);
-        if (d.output) setOutput(d.output);
-        if (d.status === 'COMPLETED') {
-          setStatus(`Job ${j.id}\nConcluído. O vídeo está pronto.`);
-          break;
-        }
-        if (d.status === 'FAILED' || d.status === 'CANCELED') {
-          throw new Error(d.error || `Job ${d.status}`);
-        }
+      setStatus('Enviando os vídeos com segurança...');
+      const [referenceKey, sourceKey] = await Promise.all([upload(reference), upload(source)]);
+      setProgress(24);
+      const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reference: referenceKey, source: sourceKey, referenceSize: reference.size, sourceSize: source.size }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Não foi possível criar o job.');
+      setStatus('Analisando referência e vídeo fonte...'); setProgress(32);
+      for (let i = 0; i < 4320; i++) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        const stateResponse = await fetch(`/api/jobs/${data.id}`, { cache: 'no-store' });
+        if (!stateResponse.ok) continue;
+        const state = await stateResponse.json();
+        if (state.status === 'QUEUED') { setStatus('Na fila do worker gratuito...'); setProgress(Math.max(32, Math.min(48, 32 + i / 120))); }
+        else if (state.status === 'RUNNING') { setStatus('Reconstruindo cortes, ritmo, movimento e aparência...'); setProgress(Math.max(48, Math.min(92, 48 + i / 120))); }
+        else if (state.status === 'COMPLETED') { setOutput(state.output); setProgress(100); setStatus('Edit concluído. O vídeo final está pronto.'); return; }
+        else if (state.status === 'FAILED' || state.status === 'CANCELED') throw new Error(state.error || `O job terminou com status ${state.status}.`);
       }
-    } catch (e) {
-      setStatus(e instanceof Error ? e.message : 'Erro inesperado');
-    } finally {
-      setBusy(false);
-    }
+      throw new Error('O processamento demorou mais do que o limite de espera desta sessão. O job continua no servidor; tente consultar novamente.');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Erro inesperado.'); setStatus('Não foi possível concluir o processamento.'); }
+    finally { setBusy(false); }
   }
 
-  return (
-    <main className="shell">
-      <section className="card">
-        <h1 className="title">EDIT-IA</h1>
-        <p className="muted">Reconstrução automática do estilo de edição.</p>
-        <div className="grid">
-          <label className="drop">Vídeo A — referência<input type="file" accept="video/mp4,video/*" onChange={e => setA(e.target.files?.[0] || null)} /></label>
-          <label className="drop">Vídeo B — vídeo fonte<input type="file" accept="video/mp4,video/*" onChange={e => setB(e.target.files?.[0] || null)} /></label>
-          <button className="btn" disabled={!a || !b || busy} onClick={create}>{busy ? 'PROCESSANDO...' : 'CRIAR EDIT'}</button>
-        </div>
-        <div className="status">{status}</div>
-        {output && <a className="btn" href={output} target="_blank" rel="noreferrer">ABRIR VÍDEO FINAL</a>}
-      </section>
-    </main>
-  );
+  const ready = Boolean(reference && source);
+  return <main className="shell"><section className="card">
+    <div className="eyebrow">IA • RECONSTRUÇÃO DE EDIÇÃO</div>
+    <h1 className="title">EDIT-IA</h1>
+    <p className="muted">Transforme um vídeo fonte para seguir a linguagem visual e temporal de um vídeo de referência.</p>
+    <div className="grid">
+      <label className="drop"><span className="dropTitle">01 · Vídeo A — referência</span><span className="dropHint">O EDIT-IA analisa cortes, ritmo, movimento e aparência.</span><input type="file" accept=".mp4,video/mp4" onChange={e => setReference(e.target.files?.[0] || null)} />{reference && <strong className="fileName">{reference.name} · {sizeLabel(reference.size)}</strong>}</label>
+      <label className="drop"><span className="dropTitle">02 · Vídeo B — fonte</span><span className="dropHint">O EDIT-IA encontra os melhores momentos para reconstruir o estilo.</span><input type="file" accept=".mp4,video/mp4" onChange={e => setSource(e.target.files?.[0] || null)} />{source && <strong className="fileName">{source.name} · {sizeLabel(source.size)}</strong>}</label>
+      <button className="btn" disabled={!ready || busy} onClick={create}>{busy ? 'PROCESSANDO...' : 'CRIAR EDIT'}</button>
+    </div>
+    {busy && <div className="progress" aria-label="Progresso"><div className="bar" style={{ width: `${progress}%` }} /></div>}
+    <div className="status" aria-live="polite">{status}</div>
+    {error && <div className="error" role="alert">{error}</div>}
+    {output && <div className="result"><div><strong>Vídeo final pronto</strong><span>Processamento concluído pelo worker.</span></div><div className="actions"><a className="btn secondary" href={output} target="_blank" rel="noreferrer">ABRIR</a><a className="btn" href={output} download="editia-final.mp4">BAIXAR MP4</a></div></div>}
+    <p className="footnote">Somente MP4 · até 500 MB por vídeo · o arquivo A é uma referência observável, não um projeto oculto de CapCut/After Effects.</p>
+  </section></main>;
 }
