@@ -1,28 +1,7 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
-
-const ROOT = path.join(process.cwd(), 'runtime-jobs');
-const MAX = 500 * 1024 * 1024;
-
-export async function POST(req: Request) {
-  const form = await req.formData();
-  const reference = form.get('reference');
-  const source = form.get('source');
-  if (!(reference instanceof File) || !(source instanceof File)) return NextResponse.json({ error: 'reference and source are required' }, { status: 400 });
-  if (reference.size > MAX || source.size > MAX) return NextResponse.json({ error: 'File too large' }, { status: 413 });
-  const id = crypto.randomUUID();
-  const dir = path.join(ROOT, id);
-  fs.mkdirSync(dir, { recursive: true });
-  const refPath = path.join(dir, 'reference.mp4');
-  const srcPath = path.join(dir, 'source.mp4');
-  fs.writeFileSync(refPath, Buffer.from(await reference.arrayBuffer()));
-  fs.writeFileSync(srcPath, Buffer.from(await source.arrayBuffer()));
-  fs.writeFileSync(path.join(dir, 'status.json'), JSON.stringify({ id, status: 'queued' }));
-  const worker = process.env.EDIT_AI_WORKER_URL;
-  if (worker) {
-    fetch(worker, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, reference: refPath, source: srcPath }) }).catch(() => undefined);
-  }
-  return NextResponse.json({ id, status: 'queued' });
-}
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+const MAX=500*1024*1024;
+function storage(){const bucket=process.env.STORAGE_BUCKET;if(!bucket)throw new Error('STORAGE_BUCKET is not configured');return {bucket,client:new S3Client({region:process.env.STORAGE_REGION||'auto',endpoint:process.env.STORAGE_ENDPOINT||undefined,credentials:{accessKeyId:process.env.STORAGE_ACCESS_KEY||'',secretAccessKey:process.env.STORAGE_SECRET_KEY||''}})};}
+export async function POST(req:Request){try{const b=await req.json();const reference=String(b?.reference||''),source=String(b?.source||'');const referenceSize=Number(b?.referenceSize||0),sourceSize=Number(b?.sourceSize||0);if(!reference||!source)return NextResponse.json({error:'reference and source keys are required'},{status:400});if(referenceSize>MAX||sourceSize>MAX)return NextResponse.json({error:'File too large'},{status:413});const endpoint=process.env.RUNPOD_ENDPOINT_ID,key=process.env.RUNPOD_API_KEY;if(!endpoint||!key)return NextResponse.json({error:'RunPod is not configured'},{status:500});const {bucket,client}=storage();const [refUrl,srcUrl]=await Promise.all([getSignedUrl(client,new GetObjectCommand({Bucket:bucket,Key:reference}),{expiresIn:3600}),getSignedUrl(client,new GetObjectCommand({Bucket:bucket,Key:source}),{expiresIn:3600})]);const id=crypto.randomUUID();const r=await fetch(`https://api.runpod.ai/v2/${endpoint}/run`,{method:'POST',headers:{'content-type':'application/json','authorization':`Bearer ${key}`},body:JSON.stringify({input:{id,reference:refUrl,source:srcUrl,storage:{endpoint:process.env.STORAGE_ENDPOINT||'',bucket,region:process.env.STORAGE_REGION||'auto',access_key:process.env.STORAGE_ACCESS_KEY||'',secret_key:process.env.STORAGE_SECRET_KEY||''}}})});const j=await r.json();if(!r.ok)return NextResponse.json({error:j?.error||'RunPod submission failed'},{status:502});return NextResponse.json({id:j.id||id,runpodId:j.id,status:j.status||'IN_QUEUE'});}catch(e){return NextResponse.json({error:e instanceof Error?e.message:'Job submission failed'},{status:500});}}
