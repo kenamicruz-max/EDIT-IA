@@ -1,9 +1,11 @@
 import json
 import os
+import re
 import shutil
 import tempfile
 import traceback
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
@@ -21,15 +23,32 @@ def clean_env(name, default=''):
     return value
 
 
-def client():
+def normalize_endpoint(raw):
     endpoint = clean_env('STORAGE_ENDPOINT')
+    if not endpoint:
+        raise RuntimeError('STORAGE_ENDPOINT is missing')
     if not endpoint.startswith(('https://', 'http://')):
         endpoint = 'https://' + endpoint
-    if '<' in endpoint or '>' in endpoint or not endpoint.split('://', 1)[-1].strip('/'):
+    parsed = urlparse(endpoint)
+    hostname = (parsed.hostname or '').strip().lower().rstrip('.')
+    if not hostname:
         raise RuntimeError('STORAGE_ENDPOINT is not a valid URL')
+    if '<' in hostname or '>' in hostname:
+        raise RuntimeError('STORAGE_ENDPOINT contains a placeholder; use the real Cloudflare R2 endpoint')
+    if not hostname.endswith('.r2.cloudflarestorage.com'):
+        match = re.search(r'([a-z0-9-]+\.r2\.cloudflarestorage\.com)', hostname)
+        if match:
+            hostname = match.group(1)
+        else:
+            raise RuntimeError('STORAGE_ENDPOINT must use the Cloudflare R2 host ending in .r2.cloudflarestorage.com')
+    return f'https://{hostname}'
+
+
+def client():
+    endpoint = normalize_endpoint(clean_env('STORAGE_ENDPOINT'))
     return boto3.client(
         's3',
-        endpoint_url=endpoint.rstrip('/'),
+        endpoint_url=endpoint,
         aws_access_key_id=clean_env('STORAGE_ACCESS_KEY'),
         aws_secret_access_key=clean_env('STORAGE_SECRET_KEY'),
         region_name=clean_env('STORAGE_REGION', 'auto') or 'auto',
