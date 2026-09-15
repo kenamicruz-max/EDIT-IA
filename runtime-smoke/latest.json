@@ -4,12 +4,12 @@
     "ok": false,
     "configured": {
       "STORAGE_ENDPOINT": true,
-      "STORAGE_BUCKET": false,
       "STORAGE_ACCESS_KEY": true,
-      "STORAGE_SECRET_KEY": true
+      "STORAGE_SECRET_KEY": true,
+      "STORAGE_BUCKET": true
     },
-    "storage": "not-tested",
-    "storageError": null,
-    "version": "5.2.3"
+    "storage": "error",
+    "storageError": "The specified key does not exist.",
+    "version": "5.2.5"
   }
 }
