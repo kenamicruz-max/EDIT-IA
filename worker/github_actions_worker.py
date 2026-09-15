@@ -6,6 +6,7 @@ import traceback
 from datetime import datetime, timezone
 
 import boto3
+from botocore.config import Config
 from core.orchestrator.pipeline import run
 
 
@@ -13,18 +14,31 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def clean_env(name, default=''):
+    value = os.environ.get(name, default).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        value = value[1:-1].strip()
+    return value
+
+
 def client():
+    endpoint = clean_env('STORAGE_ENDPOINT')
+    if not endpoint.startswith(('https://', 'http://')):
+        endpoint = 'https://' + endpoint
+    if '<' in endpoint or '>' in endpoint or not endpoint.split('://', 1)[-1].strip('/'):
+        raise RuntimeError('STORAGE_ENDPOINT is not a valid URL')
     return boto3.client(
         's3',
-        endpoint_url=os.environ['STORAGE_ENDPOINT'],
-        aws_access_key_id=os.environ['STORAGE_ACCESS_KEY'],
-        aws_secret_access_key=os.environ['STORAGE_SECRET_KEY'],
-        region_name=os.environ.get('STORAGE_REGION', 'auto'),
+        endpoint_url=endpoint.rstrip('/'),
+        aws_access_key_id=clean_env('STORAGE_ACCESS_KEY'),
+        aws_secret_access_key=clean_env('STORAGE_SECRET_KEY'),
+        region_name=clean_env('STORAGE_REGION', 'auto') or 'auto',
+        config=Config(connect_timeout=10, read_timeout=60, retries={'max_attempts': 3}),
     )
 
 
 S3 = client()
-BUCKET = os.environ['STORAGE_BUCKET']
+BUCKET = clean_env('STORAGE_BUCKET')
 
 
 def read_job(key):
