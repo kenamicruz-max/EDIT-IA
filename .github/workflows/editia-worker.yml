@@ -43,27 +43,6 @@ jobs:
           cache-dependency-path: worker/requirements.txt
       - name: Install Python dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r worker/requirements.txt
-      - name: Configure R2 browser CORS
-        run: |
-          python - <<'PY'
-          import os
-          import boto3
-          from botocore.config import Config
-          def clean(name, default=''):
-              v=os.environ.get(name,default).strip()
-              if len(v)>=2 and v[0]==v[-1] and v[0] in ('"',"'"): v=v[1:-1].strip()
-              return v
-          endpoint=clean('STORAGE_ENDPOINT')
-          if not endpoint.startswith(('https://','http://')): endpoint='https://'+endpoint
-          bucket=clean('STORAGE_BUCKET'); access=clean('STORAGE_ACCESS_KEY'); secret=clean('STORAGE_SECRET_KEY'); region=clean('STORAGE_REGION','auto') or 'auto'
-          if not all((endpoint,bucket,access,secret)): raise RuntimeError('R2 configuration is incomplete')
-          if len(access)!=32: raise RuntimeError('STORAGE_ACCESS_KEY is invalid: Cloudflare R2 S3 Access Key ID must be 32 characters.')
-          s3=boto3.client('s3',endpoint_url=endpoint,aws_access_key_id=access,aws_secret_access_key=secret,region_name=region,config=Config(signature_version='s3v4',s3={'addressing_style':'path'},connect_timeout=10,read_timeout=30,retries={'max_attempts':3}))
-          s3.put_bucket_cors(Bucket=bucket,CORSConfiguration={'CORSRules':[{'AllowedOrigins':['*'],'AllowedMethods':['GET','PUT','POST','HEAD','DELETE'],'AllowedHeaders':['*'],'ExposeHeaders':['ETag'],'MaxAgeSeconds':3600}]})
-          current=s3.get_bucket_cors(Bucket=bucket)
-          print('R2 browser CORS: configured')
-          print('R2 browser CORS rules:',len(current.get('CORSRules',[])))
-          PY
       - name: Verify R2 connection
         run: |
           python - <<'PY'
