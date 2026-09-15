@@ -1,0 +1,15 @@
+{
+  "http": "200",
+  "body": {
+    "ok": false,
+    "configured": {
+      "STORAGE_ENDPOINT": true,
+      "STORAGE_BUCKET": false,
+      "STORAGE_ACCESS_KEY": false,
+      "STORAGE_SECRET_KEY": false
+    },
+    "storage": "not-tested",
+    "storageError": null,
+    "version": "5.2.3"
+  }
+}
