@@ -5,8 +5,8 @@
     "configured": {
       "STORAGE_ENDPOINT": true,
       "STORAGE_BUCKET": false,
-      "STORAGE_ACCESS_KEY": false,
-      "STORAGE_SECRET_KEY": false
+      "STORAGE_ACCESS_KEY": true,
+      "STORAGE_SECRET_KEY": true
     },
     "storage": "not-tested",
     "storageError": null,
