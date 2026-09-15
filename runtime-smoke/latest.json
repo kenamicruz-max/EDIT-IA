@@ -1,15 +1,15 @@
 {
   "http": "200",
   "body": {
-    "ok": false,
+    "ok": true,
     "configured": {
       "STORAGE_ENDPOINT": true,
       "STORAGE_ACCESS_KEY": true,
       "STORAGE_SECRET_KEY": true,
       "STORAGE_BUCKET": true
     },
-    "storage": "error",
-    "storageError": "The specified key does not exist.",
-    "version": "5.2.6"
+    "storage": "ok",
+    "storageError": null,
+    "version": "5.2.7"
   }
 }
