@@ -11,18 +11,13 @@ def download(url,path):
                 if c:f.write(c)
 
 def handler(job):
-    inp=job.get('input',{}) if isinstance(job,dict) else {}
-    ref,src=inp.get('reference'),inp.get('source'); cfg=inp.get('storage') or {}
+    inp=job.get('input',{}) if isinstance(job,dict) else {}; ref,src=inp.get('reference'),inp.get('source'); cfg=inp.get('storage') or {}
     if not ref or not src:return {'status':'failed','error':'reference and source are required'}
     try:
-        w=tempfile.mkdtemp(prefix='editia-'); rp=os.path.join(w,'reference.mp4'); sp=os.path.join(w,'source.mp4'); out=os.path.join(w,'output.mp4')
-        download(ref,rp); download(src,sp); result=run(rp,sp,out)
-        if cfg.get('bucket') and cfg.get('access_key') and cfg.get('secret_key'):
-            s3=boto3.client('s3',region_name=cfg.get('region') or 'auto',endpoint_url=cfg.get('endpoint') or None,aws_access_key_id=cfg['access_key'],aws_secret_access_key=cfg['secret_key'])
-            key=f"outputs/{job.get('id','job')}.mp4"; s3.upload_file(out,cfg['bucket'],key,ExtraArgs={'ContentType':'video/mp4'})
-            url=s3.generate_presigned_url('get_object',Params={'Bucket':cfg['bucket'],'Key':key},ExpiresIn=86400)
-            return {'status':'completed','output':url,'output_key':key,'qc':result.get('qc'),'spec':result.get('spec')}
+        w=tempfile.mkdtemp(prefix='editia-'); rp=os.path.join(w,'reference.mp4'); sp=os.path.join(w,'source.mp4'); out=os.path.join(w,'output.mp4'); download(ref,rp); download(src,sp); result=run(rp,sp,out)
+        bucket=cfg.get('bucket') or os.getenv('STORAGE_BUCKET'); endpoint=cfg.get('endpoint') or os.getenv('STORAGE_ENDPOINT'); region=cfg.get('region') or os.getenv('STORAGE_REGION') or 'auto'; ak=os.getenv('STORAGE_ACCESS_KEY'); sk=os.getenv('STORAGE_SECRET_KEY')
+        if bucket and ak and sk:
+            s3=boto3.client('s3',region_name=region,endpoint_url=endpoint or None,aws_access_key_id=ak,aws_secret_access_key=sk); key=f"outputs/{job.get('id','job')}.mp4"; s3.upload_file(out,bucket,key,ExtraArgs={'ContentType':'video/mp4'}); url=s3.generate_presigned_url('get_object',Params={'Bucket':bucket,'Key':key},ExpiresIn=86400); return {'status':'completed','output':url,'output_key':key,'qc':result.get('qc'),'spec':result.get('spec')}
         return {'status':'completed','output':out,'qc':result.get('qc'),'spec':result.get('spec')}
     except Exception as e:return {'status':'failed','error':str(e),'traceback':traceback.format_exc()}
-
 if runpod: runpod.serverless.start({'handler':handler})
