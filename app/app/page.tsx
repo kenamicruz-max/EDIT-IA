@@ -94,8 +94,8 @@ export default function Page() {
       try {
         setBusy(true);
         setStatus('Recuperando o último processamento...');
-        const done = await pollJob(id, 15000);
-        if (alive && !done) setStatus('Job recuperado. O processamento continua no servidor.');
+        const done = await pollJob(id);
+        if (alive && !done) setStatus('O job continua no servidor. Atualize a página para consultar novamente.');
       } catch (e) {
         if (alive) { setError(e instanceof Error ? e.message : 'Não foi possível recuperar o job.'); setStatus('Não foi possível recuperar o processamento.'); }
       } finally { if (alive) setBusy(false); }
