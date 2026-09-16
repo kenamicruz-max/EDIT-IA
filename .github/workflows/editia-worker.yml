@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: editia-video-worker
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   EDITIA_R2_BUCKET: edit-ia-media
