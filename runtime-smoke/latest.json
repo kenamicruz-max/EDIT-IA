@@ -1,15 +1,15 @@
 {
   "http": "200",
   "body": {
-    "ok": true,
+    "ok": false,
     "configured": {
       "STORAGE_ENDPOINT": true,
       "STORAGE_ACCESS_KEY": true,
       "STORAGE_SECRET_KEY": true,
       "STORAGE_BUCKET": true
     },
-    "storage": "ok",
-    "storageError": null,
+    "storage": "error",
+    "storageError": "The request signature we calculated does not match the signature you provided. Check your secret access key and signing method.",
     "version": "5.2.7"
   }
 }
