@@ -34,17 +34,6 @@ def _dimensions(path):
     return 1280, 720
 
 
-def _probe_duration(path):
-    result = subprocess.run(
-        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', path],
-        capture_output=True, text=True, check=False,
-    )
-    try:
-        return max(0.0, float(result.stdout.strip()))
-    except Exception:
-        return 0.0
-
-
 def _video_filter(segment, width, height):
     speed = max(0.5, min(2.0, float(segment.get('speed', 1.0) or 1.0)))
     brightness = float(segment.get('brightness_delta', 0.0)) / 255.0
@@ -84,7 +73,6 @@ def render(spec, source_path, output_path, reference_path=None):
     clips = []
     reference_path = reference_path if reference_path and os.path.exists(reference_path) else None
     audio_path = reference_path if reference_path and _has_audio(reference_path) else source_path if _has_audio(source_path) else None
-    target_video_duration = max(0.05, float(spec.get('duration', 0.0) or 0.0))
     width, height = _dimensions(reference_path or source_path)
     try:
         segments = spec.get('segments', [])
@@ -99,13 +87,12 @@ def render(spec, source_path, output_path, reference_path=None):
             available = max(0.05, float(segment.get('source_end', start + target)) - start)
             source_len = max(0.05, min(available, target * speed))
             vf = _video_filter(segment, width, height)
-            cmd = [
+            _run([
                 'ffmpeg', '-y', '-ss', f'{start:.6f}', '-i', source_path,
                 '-t', f'{source_len:.6f}', '-vf', vf, '-r', '30', '-an',
                 '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
                 '-t', f'{target:.6f}', clip,
-            ]
-            _run(cmd)
+            ])
             clips.append(clip)
 
         concat = os.path.join(work, 'concat.txt')
@@ -117,12 +104,11 @@ def render(spec, source_path, output_path, reference_path=None):
         _run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat, '-c', 'copy', '-movflags', '+faststart', silent_output])
 
         if audio_path:
-            audio_duration = _probe_duration(audio_path)
-            duration = min(target_video_duration, audio_duration) if audio_duration > 0 else target_video_duration
+            duration = max(0.05, float(spec.get('duration', 0.0) or sum(float(s.get('duration', 0.0)) for s in segments)))
             _run([
                 'ffmpeg', '-y', '-i', silent_output, '-i', audio_path,
                 '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
-                '-t', f'{duration:.6f}', '-movflags', '+faststart', output_path,
+                '-af', 'apad', '-t', f'{duration:.6f}', '-movflags', '+faststart', output_path,
             ])
         else:
             shutil.copyfile(silent_output, output_path)
