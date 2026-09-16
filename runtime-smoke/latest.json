@@ -10,6 +10,7 @@
     },
     "storage": "error",
     "storageError": "The request signature we calculated does not match the signature you provided. Check your secret access key and signing method.",
-    "version": "5.2.7"
+    "bucket": "edit-ia-media",
+    "version": "5.2.11"
   }
 }
