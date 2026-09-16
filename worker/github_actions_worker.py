@@ -13,6 +13,7 @@ from core.orchestrator.pipeline import run
 
 
 R2_BUCKET_DEFAULT = 'edit-ia-media'
+STALE_RUNNING_AFTER = timedelta(minutes=30)
 
 
 def now():
@@ -102,7 +103,7 @@ def _stale_running(job):
     raw = job.get('updatedAt') or job.get('createdAt')
     try:
         stamp = datetime.fromisoformat(raw.replace('Z', '+00:00'))
-        return datetime.now(timezone.utc) - stamp > timedelta(hours=6)
+        return datetime.now(timezone.utc) - stamp > STALE_RUNNING_AFTER
     except Exception:
         return False
 
@@ -121,6 +122,7 @@ def queued_jobs():
             try:
                 job = read_job(key)
                 if _stale_running(job):
+                    print(f"Requeueing stale RUNNING job {job.get('id')} (no heartbeat for 30 minutes)")
                     job['status'] = 'QUEUED'
                     job['stage'] = 'REQUEUED'
                     job['progress'] = 0
