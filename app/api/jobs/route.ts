@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { enqueue } from '../../lib/r2queue';
-import { characters } from '../../../data/characters';
-import { editStyles } from '../../../data/styles';
+import { characters } from '../../data/characters';
+import { editStyles } from '../../data/styles';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -19,20 +19,10 @@ export async function POST(req: Request) {
     const sourceSize = Number(body?.sourceSize || 0);
     const characterId = String(body?.characterId || '');
     const styleId = String(body?.styleId || '');
-
-    if (!keyPattern.test(reference) || !keyPattern.test(source)) {
-      return NextResponse.json({ error: 'Los archivos subidos no son válidos.' }, { status: 400 });
-    }
-    if (![referenceSize, sourceSize].every(Number.isSafeInteger) || referenceSize <= 0 || sourceSize <= 0 || referenceSize > MAX || sourceSize > MAX) {
-      return NextResponse.json({ error: 'El tamaño de los vídeos no es válido.' }, { status: 413 });
-    }
-    if (!idPattern.test(characterId) || !characters.some((item) => item.id === characterId && item.enabled)) {
-      return NextResponse.json({ error: 'El personaje seleccionado no es válido.' }, { status: 400 });
-    }
-    if (!idPattern.test(styleId) || !editStyles.some((item) => item.id === styleId && item.enabled)) {
-      return NextResponse.json({ error: 'El estilo seleccionado no es válido.' }, { status: 400 });
-    }
-
+    if (!keyPattern.test(reference) || !keyPattern.test(source)) return NextResponse.json({ error: 'Los archivos subidos no son válidos.' }, { status: 400 });
+    if (![referenceSize, sourceSize].every(Number.isSafeInteger) || referenceSize <= 0 || sourceSize <= 0 || referenceSize > MAX || sourceSize > MAX) return NextResponse.json({ error: 'El tamaño de los vídeos no es válido.' }, { status: 413 });
+    if (!idPattern.test(characterId) || !characters.some(item => item.id === characterId && item.enabled)) return NextResponse.json({ error: 'El personaje seleccionado no es válido.' }, { status: 400 });
+    if (!idPattern.test(styleId) || !editStyles.some(item => item.id === styleId && item.enabled)) return NextResponse.json({ error: 'El estilo seleccionado no es válido.' }, { status: 400 });
     const job = await enqueue({ reference, source, referenceSize, sourceSize, characterId, styleId });
     return NextResponse.json(job, { status: 201, headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
