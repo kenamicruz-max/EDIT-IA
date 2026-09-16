@@ -27,13 +27,14 @@ function storage() {
     throw error;
   }
 
-  const endpoint = /^https?:\/\//i.test(endpointRaw) ? endpointRaw : `https://${endpointRaw}`;
+  // R2's documented S3 endpoint is used directly. Remove accidental trailing
+  // slashes so the SDK signs exactly the same canonical endpoint every time.
+  const endpoint = (/^https?:\/\//i.test(endpointRaw) ? endpointRaw : `https://${endpointRaw}`).replace(/\/+$/, '');
   return {
     bucket,
     client: new S3Client({
       region: safeEnv('STORAGE_REGION') || 'auto',
       endpoint,
-      forcePathStyle: true,
       credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
     }),
   };
