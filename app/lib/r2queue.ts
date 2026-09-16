@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 const e=(n:string)=>process.env[n]?.trim().replace(/^['\"]|['\"]$/g,'')||'';
-const bucket=()=>e('STORAGE_BUCKET')||'edit-ia-media';
+const BUCKET='edit-ia-media';
 export async function enqueue(input:{reference:string;source:string;referenceSize:number;sourceSize:number}){
   const miss=['STORAGE_ENDPOINT','STORAGE_ACCESS_KEY','STORAGE_SECRET_KEY'].filter(n=>!e(n));
   if(miss.length)throw new Error(`Storage runtime configuration is missing: ${miss.join(', ')}`);
@@ -10,7 +10,7 @@ export async function enqueue(input:{reference:string;source:string;referenceSiz
   const ep0=e('STORAGE_ENDPOINT'),ep=/^https?:\/\//i.test(ep0)?ep0:`https://${ep0}`;
   const c=new S3Client({region:e('STORAGE_REGION')||'auto',endpoint:ep,forcePathStyle:true,credentials:{accessKeyId:e('STORAGE_ACCESS_KEY'),secretAccessKey:e('STORAGE_'+'SECRET_KEY')}});
   const id=crypto.randomUUID();
-  const job={id,status:'QUEUED',stage:'QUEUED',progress:3,detail:'Job created. Waiting for the free worker.',...input,createdAt:new Date().toISOString(),version:'5.2.10'};
-  await c.send(new PutObjectCommand({Bucket:bucket(),Key:`jobs/${id}.json`,Body:JSON.stringify(job),ContentType:'application/json',CacheControl:'no-store'}));
-  return{id,status:'QUEUED',stage:'QUEUED',progress:3,version:'5.2.10'};
+  const job={id,status:'QUEUED',stage:'QUEUED',progress:3,detail:'Job created. Waiting for the free worker.',...input,createdAt:new Date().toISOString(),version:'5.2.12'};
+  await c.send(new PutObjectCommand({Bucket:BUCKET,Key:`jobs/${id}.json`,Body:JSON.stringify(job),ContentType:'application/json',CacheControl:'no-store'}));
+  return{id,status:'QUEUED',stage:'QUEUED',progress:3,version:'5.2.12'};
 }
