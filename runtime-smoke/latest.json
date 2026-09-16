@@ -2,15 +2,7 @@
   "http": "200",
   "body": {
     "ok": true,
-    "configured": {
-      "STORAGE_ENDPOINT": true,
-      "STORAGE_ACCESS_KEY": true,
-      "STORAGE_SECRET_KEY": true,
-      "STORAGE_BUCKET": true
-    },
-    "storage": "ok",
-    "storageError": null,
-    "bucket": "edit-ia-media",
-    "version": "5.2.11"
+    "service": "EDIT-IA",
+    "version": "1.0.0"
   }
 }
