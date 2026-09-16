@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const MAX = 500 * 1024 * 1024;
 const SESSION_LIMIT_MS = 6 * 60 * 60 * 1000;
+const JOB_KEY = 'editia:last-job-id';
 function sizeLabel(size: number) { return `${(size / 1024 / 1024).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`; }
 function stageLabel(stage: string | null, status: string | null) {
   if (status === 'QUEUED') return 'Na fila do worker gratuito — aguardando processamento...';
@@ -48,6 +49,60 @@ export default function Page() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
 
+  async function pollJob(id: string, maxWait = SESSION_LIMIT_MS) {
+    const started = Date.now();
+    let consecutiveStatusErrors = 0;
+    while (Date.now() - started < maxWait) {
+      const stateResponse = await fetch(`/api/jobs/${id}`, { cache: 'no-store' });
+      if (!stateResponse.ok) {
+        const body = await stateResponse.json().catch(() => ({}));
+        if (stateResponse.status === 404) {
+          localStorage.removeItem(JOB_KEY);
+          throw new Error(body.error || 'O job não foi encontrado na fila.');
+        }
+        consecutiveStatusErrors += 1;
+        setStatus(`Aguardando resposta do servidor... (${consecutiveStatusErrors}/3)`);
+        if (consecutiveStatusErrors >= 3) throw new Error(body.error || 'Não foi possível consultar o estado do processamento.');
+      } else {
+        consecutiveStatusErrors = 0;
+        const state = await stateResponse.json();
+        const serverProgress = Number(state.progress);
+        if (Number.isFinite(serverProgress)) setProgress(Math.max(3, Math.min(100, serverProgress)));
+        setStatus(state.detail || stageLabel(state.stage, state.status));
+        if (state.status === 'COMPLETED') {
+          localStorage.removeItem(JOB_KEY);
+          setOutput(state.output);
+          setProgress(100);
+          setStatus('Edit concluído. O vídeo final está pronto.');
+          return true;
+        }
+        if (state.status === 'FAILED' || state.status === 'CANCELED') {
+          localStorage.removeItem(JOB_KEY);
+          throw new Error(state.error || `O job terminou com status ${state.status}.`);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+    return false;
+  }
+
+  useEffect(() => {
+    const id = localStorage.getItem(JOB_KEY);
+    if (!id) return;
+    let alive = true;
+    (async () => {
+      try {
+        setBusy(true);
+        setStatus('Recuperando o último processamento...');
+        const done = await pollJob(id, 15000);
+        if (alive && !done) setStatus('Job recuperado. O processamento continua no servidor.');
+      } catch (e) {
+        if (alive) { setError(e instanceof Error ? e.message : 'Não foi possível recuperar o job.'); setStatus('Não foi possível recuperar o processamento.'); }
+      } finally { if (alive) setBusy(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   async function create() {
     if (!reference || !source || busy) return;
     setBusy(true); setError(''); setOutput(null); setProgress(2);
@@ -58,32 +113,10 @@ export default function Page() {
       const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reference: referenceKey, source: sourceKey, referenceSize: reference.size, sourceSize: source.size }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.id) throw new Error(data.error || 'Não foi possível criar o job.');
+      localStorage.setItem(JOB_KEY, data.id);
       setStatus('Job criado. Aguardando o worker...');
-
-      const started = Date.now();
-      let consecutiveStatusErrors = 0;
-      while (Date.now() - started < SESSION_LIMIT_MS) {
-        const stateResponse = await fetch(`/api/jobs/${data.id}`, { cache: 'no-store' });
-        if (!stateResponse.ok) {
-          const body = await stateResponse.json().catch(() => ({}));
-          if (stateResponse.status === 404) throw new Error(body.error || 'O job não foi encontrado na fila.');
-          consecutiveStatusErrors += 1;
-          setStatus(`Aguardando resposta do servidor... (${consecutiveStatusErrors}/3)`);
-          if (consecutiveStatusErrors >= 3) throw new Error(body.error || 'Não foi possível consultar o estado do processamento.');
-        } else {
-          consecutiveStatusErrors = 0;
-          const state = await stateResponse.json();
-          const serverProgress = Number(state.progress);
-          if (Number.isFinite(serverProgress)) setProgress(Math.max(3, Math.min(100, serverProgress)));
-          setStatus(state.detail || stageLabel(state.stage, state.status));
-          if (state.status === 'QUEUED') setProgress(Math.max(3, Number.isFinite(serverProgress) ? serverProgress : 3));
-          else if (state.status === 'RUNNING') setProgress(Math.max(4, Number.isFinite(serverProgress) ? serverProgress : 4));
-          else if (state.status === 'COMPLETED') { setOutput(state.output); setProgress(100); setStatus('Edit concluído. O vídeo final está pronto.'); return; }
-          else if (state.status === 'FAILED' || state.status === 'CANCELED') throw new Error(state.error || `O job terminou com status ${state.status}.`);
-        }
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      }
-      throw new Error('Esta sessão deixou de esperar pelo job. O processamento pode continuar no servidor; atualize a página para consultar novamente.');
+      const done = await pollJob(data.id);
+      if (!done) throw new Error('Esta sessão deixou de esperar pelo job. O processamento continua no servidor; atualize a página para consultar novamente.');
     } catch (e) { setError(e instanceof Error ? e.message : 'Erro inesperado.'); setStatus('Não foi possível concluir o processamento.'); }
     finally { setBusy(false); }
   }
