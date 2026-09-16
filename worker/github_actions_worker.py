@@ -62,13 +62,19 @@ def write_job(job):
     S3.put_object(Bucket=BUCKET, Key=f"jobs/{job['id']}.json", Body=json.dumps(job, ensure_ascii=False).encode('utf-8'), ContentType='application/json', CacheControl='no-store')
 
 
+def set_progress(job, stage, percent, detail=''):
+    job.update({'stage': stage, 'progress': max(0, min(100, int(percent))), 'detail': detail})
+    write_job(job)
+    print(f"{job['id']} | {stage} | {percent}% | {detail}")
+
+
 def _stale_running(job):
     if job.get('status') != 'RUNNING':
         return False
     raw = job.get('updatedAt') or job.get('createdAt')
     try:
         stamp = datetime.fromisoformat(raw.replace('Z', '+00:00'))
-        return datetime.now(timezone.utc) - stamp > timedelta(hours=8)
+        return datetime.now(timezone.utc) - stamp > timedelta(hours=6)
     except Exception:
         return False
 
@@ -77,19 +83,27 @@ def queued_jobs():
     items, token = [], None
     while True:
         kwargs = {'Bucket': BUCKET, 'Prefix': 'jobs/'}
-        if token: kwargs['ContinuationToken'] = token
+        if token:
+            kwargs['ContinuationToken'] = token
         page = S3.list_objects_v2(**kwargs)
         for obj in page.get('Contents', []):
             key = obj['Key']
-            if not key.endswith('.json'): continue
+            if not key.endswith('.json'):
+                continue
             try:
                 job = read_job(key)
                 if _stale_running(job):
-                    job['status'] = 'QUEUED'; job['requeuedAt'] = now(); write_job(job)
-                if job.get('status') == 'QUEUED': items.append((job.get('createdAt', ''), key, job))
+                    job['status'] = 'QUEUED'
+                    job['stage'] = 'REQUEUED'
+                    job['progress'] = 0
+                    job['requeuedAt'] = now()
+                    write_job(job)
+                if job.get('status') == 'QUEUED':
+                    items.append((job.get('createdAt', ''), key, job))
             except Exception as exc:
                 print(f'Ignoring invalid job {key}: {exc}')
-        if not page.get('IsTruncated'): break
+        if not page.get('IsTruncated'):
+            break
         token = page.get('NextContinuationToken')
     items.sort(key=lambda x: x[0])
     return items
@@ -99,27 +113,42 @@ def process(job):
     work = tempfile.mkdtemp(prefix=f"editia-{job['id']}-")
     reference, source, output = [os.path.join(work, name) for name in ('reference.mp4', 'source.mp4', 'output.mp4')]
     try:
-        job['status'] = 'RUNNING'; write_job(job); print(f"Processing {job['id']}")
+        job['status'] = 'RUNNING'
+        set_progress(job, 'STARTING', 1, 'Starting EDIT-IA worker')
+        set_progress(job, 'DOWNLOADING', 2, 'Downloading reference and source videos')
         S3.download_file(BUCKET, job['reference'], reference)
         S3.download_file(BUCKET, job['source'], source)
-        result = run(reference, source, output)
+        set_progress(job, 'ANALYZING', 4, 'Analyzing reference and source videos')
+
+        def progress(stage, percent, detail):
+            # Pipeline stages are deliberately persisted so the UI never has to guess.
+            set_progress(job, stage, max(4, percent), detail)
+
+        result = run(reference, source, output, progress=progress)
+        set_progress(job, 'UPLOADING', 98, 'Uploading final MP4')
         output_key = f"outputs/{job['id']}.mp4"
         S3.upload_file(output, BUCKET, output_key, ExtraArgs={'ContentType': 'video/mp4'})
         output_url = S3.generate_presigned_url('get_object', Params={'Bucket': BUCKET, 'Key': output_key}, ExpiresIn=86400)
-        job.update({'status': 'COMPLETED', 'output': output_url, 'outputKey': output_key, 'qc': result.get('qc'), 'spec': result.get('spec'), 'finishedAt': now()})
-        write_job(job); print(f"Completed {job['id']}")
+        job.update({'status': 'COMPLETED', 'stage': 'COMPLETED', 'progress': 100, 'detail': 'Edit completed and quality checked', 'output': output_url, 'outputKey': output_key, 'qc': result.get('qc'), 'spec': result.get('spec'), 'finishedAt': now()})
+        write_job(job)
+        print(f"Completed {job['id']}")
     except Exception as exc:
-        job.update({'status': 'FAILED', 'error': str(exc), 'traceback': traceback.format_exc()[-12000:], 'finishedAt': now()})
-        try: write_job(job)
-        except Exception: print(traceback.format_exc())
+        job.update({'status': 'FAILED', 'stage': 'FAILED', 'progress': 0, 'detail': 'Processing failed', 'error': str(exc), 'traceback': traceback.format_exc()[-12000:], 'finishedAt': now()})
+        try:
+            write_job(job)
+        except Exception:
+            print(traceback.format_exc())
         print(f"Failed {job['id']}: {exc}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
-    jobs = queued_jobs(); print(f'Found {len(jobs)} queued job(s)')
-    for _, _, job in jobs: process(job)
+    jobs = queued_jobs()
+    print(f'Found {len(jobs)} queued job(s)')
+    for _, _, job in jobs:
+        process(job)
 
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    main()
