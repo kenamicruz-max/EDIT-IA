@@ -25,7 +25,7 @@ jobs:
       STORAGE_BUCKET: ${{ secrets.STORAGE_BUCKET }}
       STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
       STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
-      STORAGE_REGION: ${{ secrets.STORAGE_REGION }}
+      STORAGE_REGION: auto
       AWS_EC2_METADATA_DISABLED: 'true'
       PYTHONPATH: ${{ github.workspace }}
     steps:
@@ -77,16 +77,17 @@ jobs:
               v=os.environ.get(name,default).strip()
               if len(v)>=2 and v[0]==v[-1] and v[0] in ('"',"'"): v=v[1:-1].strip()
               return v
-          endpoint=clean('STORAGE_ENDPOINT'); bucket=clean('STORAGE_BUCKET'); region=clean('STORAGE_REGION','auto') or 'auto'; access=clean('STORAGE_ACCESS_KEY'); secret=clean('STORAGE_SECRET_KEY')
-          missing=[k for k,v in {'STORAGE_ENDPOINT':endpoint,'STORAGE_BUCKET':bucket,'STORAGE_ACCESS_KEY':access,'STORAGE_SECRET_KEY':secret,'STORAGE_REGION':region}.items() if not v]
-          print('R2 endpoint configured:',bool(endpoint)); print('R2 bucket configured:',bool(bucket)); print('R2 bucket fingerprint:',hashlib.sha256(bucket.encode()).hexdigest() if bucket else 'missing'); print('R2 credentials configured:',bool(access) and bool(secret)); print('R2 region configured:',region)
+          endpoint=clean('STORAGE_ENDPOINT'); bucket=clean('STORAGE_BUCKET'); access=clean('STORAGE_ACCESS_KEY'); secret=clean('STORAGE_SECRET_KEY')
+          region='auto'
+          missing=[k for k,v in {'STORAGE_ENDPOINT':endpoint,'STORAGE_BUCKET':bucket,'STORAGE_ACCESS_KEY':access,'STORAGE_SECRET_KEY':secret}.items() if not v]
+          print('R2 endpoint configured:',bool(endpoint)); print('R2 bucket configured:',bool(bucket)); print('R2 bucket fingerprint:',hashlib.sha256(bucket.encode()).hexdigest() if bucket else 'missing'); print('R2 credentials configured:',bool(access) and bool(secret)); print('R2 signing region: auto')
           if missing: raise RuntimeError('Missing GitHub Actions secret(s): '+', '.join(missing))
           if len(access)!=32: raise RuntimeError('STORAGE_ACCESS_KEY is invalid: Cloudflare R2 S3 Access Key ID must be 32 characters.')
           if not endpoint.startswith(('https://','http://')): endpoint='https://'+endpoint
           host=(urlparse(endpoint).hostname or '').strip().lower().rstrip('.')
           if not host or not host.endswith('.r2.cloudflarestorage.com'): raise RuntimeError('STORAGE_ENDPOINT must use the Cloudflare R2 host ending in .r2.cloudflarestorage.com')
           endpoint='https://'+host
-          s3=boto3.client('s3',endpoint_url=endpoint,aws_access_key_id=access,aws_secret_access_key=secret,region_name=region,config=Config(signature_version='s3v4',s3={'addressing_style':'path'},connect_timeout=10,read_timeout=30,retries={'max_attempts':3}))
+          s3=boto3.client('s3',endpoint_url=endpoint,aws_access_key_id=access,aws_secret_access_key=secret,region_name='auto',config=Config(signature_version='s3v4',s3={'addressing_style':'path'},connect_timeout=10,read_timeout=30,retries={'max_attempts':3}))
           response=s3.list_objects_v2(Bucket=bucket,Prefix='jobs/',MaxKeys=1)
           print('R2 connection: OK'); print('R2 queue objects visible:',len(response.get('Contents',[])))
           PY
