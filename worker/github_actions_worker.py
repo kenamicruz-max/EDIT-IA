@@ -45,11 +45,26 @@ def normalize_endpoint():
 
 
 def client():
-    return boto3.client('s3', endpoint_url=normalize_endpoint(), aws_access_key_id=clean_env('STORAGE_ACCESS_KEY'), aws_secret_access_key=clean_env('STORAGE_SECRET_KEY'), region_name=clean_env('STORAGE_REGION', 'auto') or 'auto', config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}, connect_timeout=10, read_timeout=60, retries={'max_attempts': 3}))
+    access = clean_env('STORAGE_ACCESS_KEY')
+    secret = clean_env('STORAGE_SECRET_KEY')
+    if not access or not secret:
+        raise RuntimeError('STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY are required')
+    # Cloudflare R2's S3 API requires the SDK region to be "auto"; do not let a stale
+    # STORAGE_REGION secret change the SigV4 credential scope.
+    return boto3.client(
+        's3',
+        endpoint_url=normalize_endpoint(),
+        aws_access_key_id=access,
+        aws_secret_access_key=secret,
+        region_name='auto',
+        config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}, connect_timeout=10, read_timeout=60, retries={'max_attempts': 3}),
+    )
 
 
 S3 = client()
 BUCKET = clean_env('STORAGE_BUCKET')
+if not BUCKET:
+    raise RuntimeError('STORAGE_BUCKET is missing')
 
 
 def read_job(key):
@@ -121,7 +136,6 @@ def process(job):
         set_progress(job, 'ANALYZING', 4, 'Analyzing reference and source videos')
 
         def progress(stage, percent, detail):
-            # Pipeline stages are deliberately persisted so the UI never has to guess.
             set_progress(job, stage, max(4, percent), detail)
 
         result = run(reference, source, output, progress=progress)
