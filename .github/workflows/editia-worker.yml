@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  EDITIA_R2_BUCKET: editar-ia-media
+  EDITIA_R2_BUCKET: edit-ia-media
 
 jobs:
   process:
@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 360
     env:
       STORAGE_ENDPOINT: ${{ secrets.STORAGE_ENDPOINT }}
-      STORAGE_BUCKET: editar-ia-media
+      STORAGE_BUCKET: edit-ia-media
       STORAGE_ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
       STORAGE_SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
       STORAGE_REGION: auto
