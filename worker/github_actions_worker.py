@@ -12,6 +12,9 @@ from botocore.config import Config
 from core.orchestrator.pipeline import run
 
 
+R2_BUCKET_DEFAULT = 'editar-ia-media'
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -49,22 +52,26 @@ def client():
     secret = clean_env('STORAGE_SECRET_KEY')
     if not access or not secret:
         raise RuntimeError('STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY are required')
-    # Cloudflare R2's S3 API requires the SDK region to be "auto"; do not let a stale
-    # STORAGE_REGION secret change the SigV4 credential scope.
+    if len(access) != 32:
+        raise RuntimeError('STORAGE_ACCESS_KEY is invalid: Cloudflare R2 Access Key ID must be 32 characters')
     return boto3.client(
         's3',
         endpoint_url=normalize_endpoint(),
         aws_access_key_id=access,
         aws_secret_access_key=secret,
         region_name='auto',
-        config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}, connect_timeout=10, read_timeout=60, retries={'max_attempts': 3}),
+        config=Config(
+            signature_version='s3v4',
+            s3={'addressing_style': 'path'},
+            connect_timeout=10,
+            read_timeout=60,
+            retries={'max_attempts': 3},
+        ),
     )
 
 
 S3 = client()
-BUCKET = clean_env('STORAGE_BUCKET')
-if not BUCKET:
-    raise RuntimeError('STORAGE_BUCKET is missing')
+BUCKET = clean_env('STORAGE_BUCKET') or R2_BUCKET_DEFAULT
 
 
 def read_job(key):
@@ -74,7 +81,13 @@ def read_job(key):
 
 def write_job(job):
     job['updatedAt'] = now()
-    S3.put_object(Bucket=BUCKET, Key=f"jobs/{job['id']}.json", Body=json.dumps(job, ensure_ascii=False).encode('utf-8'), ContentType='application/json', CacheControl='no-store')
+    S3.put_object(
+        Bucket=BUCKET,
+        Key=f"jobs/{job['id']}.json",
+        Body=json.dumps(job, ensure_ascii=False).encode('utf-8'),
+        ContentType='application/json',
+        CacheControl='no-store',
+    )
 
 
 def set_progress(job, stage, percent, detail=''):
@@ -143,11 +156,29 @@ def process(job):
         output_key = f"outputs/{job['id']}.mp4"
         S3.upload_file(output, BUCKET, output_key, ExtraArgs={'ContentType': 'video/mp4'})
         output_url = S3.generate_presigned_url('get_object', Params={'Bucket': BUCKET, 'Key': output_key}, ExpiresIn=86400)
-        job.update({'status': 'COMPLETED', 'stage': 'COMPLETED', 'progress': 100, 'detail': 'Edit completed and quality checked', 'output': output_url, 'outputKey': output_key, 'qc': result.get('qc'), 'spec': result.get('spec'), 'finishedAt': now()})
+        job.update({
+            'status': 'COMPLETED',
+            'stage': 'COMPLETED',
+            'progress': 100,
+            'detail': 'Edit completed and quality checked',
+            'output': output_url,
+            'outputKey': output_key,
+            'qc': result.get('qc'),
+            'spec': result.get('spec'),
+            'finishedAt': now(),
+        })
         write_job(job)
         print(f"Completed {job['id']}")
     except Exception as exc:
-        job.update({'status': 'FAILED', 'stage': 'FAILED', 'progress': 0, 'detail': 'Processing failed', 'error': str(exc), 'traceback': traceback.format_exc()[-12000:], 'finishedAt': now()})
+        job.update({
+            'status': 'FAILED',
+            'stage': 'FAILED',
+            'progress': 0,
+            'detail': 'Processing failed',
+            'error': str(exc),
+            'traceback': traceback.format_exc()[-12000:],
+            'finishedAt': now(),
+        })
         try:
             write_job(job)
         except Exception:
@@ -158,6 +189,7 @@ def process(job):
 
 
 def main():
+    print(f'EDIT-IA R2 bucket: {BUCKET}')
     jobs = queued_jobs()
     print(f'Found {len(jobs)} queued job(s)')
     for _, _, job in jobs:
