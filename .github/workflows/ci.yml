@@ -53,9 +53,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install web dependencies
+      - name: Install root web dependencies
         run: npm install
-      - name: Typecheck
+      - name: Typecheck root web app
         run: npx tsc --noEmit
-      - name: Build Next.js app
+      - name: Build root web app
+        run: npm run build
+      - name: Install Vercel-root web dependencies
+        working-directory: app
+        run: npm install
+      - name: Typecheck Vercel-root web app
+        working-directory: app
+        run: npx tsc --noEmit
+      - name: Build Vercel-root web app
+        working-directory: app
         run: npm run build
