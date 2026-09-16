@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from core.agents import audio, video, effects, transitions, text, vision, color, motion, source_matcher, master_editor, qc, autocorrect
 from core.render.ffmpeg_renderer import render
 import os
@@ -8,60 +9,75 @@ def run(reference_path, source_path, output_path, max_iterations=3, progress=Non
         if progress:
             progress(stage, percent, detail)
 
-    report('AUDIO_REFERENCE', 5, 'Analyzing reference audio')
-    reference_audio = audio.analyze(reference_path)
-    report('VIDEO_REFERENCE', 10, 'Analyzing reference video')
-    reference_video = video.analyze(reference_path)
-    report('AUDIO_SOURCE', 15, 'Analyzing source audio')
-    source_audio = audio.analyze(source_path)
-    report('VIDEO_SOURCE', 20, 'Analyzing source video')
-    source_video = video.analyze(source_path)
+    report('ANALYSIS_START', 4, 'Starting parallel reference and source analysis')
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        jobs = {
+            'reference_audio': pool.submit(audio.analyze, reference_path),
+            'reference_video': pool.submit(video.analyze, reference_path),
+            'source_audio': pool.submit(audio.analyze, source_path),
+            'source_video': pool.submit(video.analyze, source_path),
+        }
+        results = {}
+        for future in as_completed(jobs):
+            key = jobs[future]
+            results[key] = future.result()
+            report('ANALYSIS_PROGRESS', 20, f'Finished {key.replace("_", " ")}')
 
-    reference = {'audio': reference_audio, 'video': reference_video}
-    source = {'audio': source_audio, 'video': source_video}
+    reference = {'audio': results['reference_audio'], 'video': results['reference_video']}
+    source = {'audio': results['source_audio'], 'video': results['source_video']}
 
     specialists = (
-        ('EFFECTS', effects),
-        ('TRANSITIONS', transitions),
-        ('TEXT', text),
-        ('VISION', vision),
-        ('COLOR', color),
-        ('MOTION', motion),
+        ('effects', effects),
+        ('transitions', transitions),
+        ('text', text),
+        ('vision', vision),
+        ('color', color),
+        ('motion', motion),
     )
-    for label, specialist in specialists:
-        report(f'REFERENCE_{label}', 20, f'Analyzing reference {label.lower()}')
-        reference[label.lower()] = specialist.analyze(reference_video)
-        report(f'SOURCE_{label}', 20, f'Analyzing source {label.lower()}')
-        source[label.lower()] = specialist.analyze(source_video)
+    report('SPECIALISTS_START', 22, 'Running specialized analyzers in parallel')
+    specialist_jobs = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for name, specialist in specialists:
+            specialist_jobs[('reference', name)] = pool.submit(specialist.analyze, reference['video'])
+            specialist_jobs[('source', name)] = pool.submit(specialist.analyze, source['video'])
+        completed = 0
+        total = len(specialist_jobs)
+        for future in as_completed(specialist_jobs):
+            owner, name = specialist_jobs[future]
+            (reference if owner == 'reference' else source)[name] = future.result()
+            completed += 1
+            percent = 22 + int((completed / total) * 23)
+            report('SPECIALISTS_PROGRESS', percent, f'{owner.title()} {name} specialist completed ({completed}/{total})')
 
-    report('MASTER_SPEC', 45, 'Building the edit specification')
+    report('MASTER_SPEC', 47, 'Building the edit specification')
     spec = master_editor.build(reference, source)
-    report('COLOR_MATCH', 50, 'Matching the visual grade')
+    report('COLOR_MATCH', 51, 'Matching the visual grade')
     grade = color.match_grade(reference['color'], source['color'])
     for segment in spec['segments']:
         segment.update(grade)
 
-    report('SOURCE_MATCH', 58, 'Finding the best source moments')
+    report('SOURCE_MATCH', 59, 'Finding the best source moments')
     matches = source_matcher.match(spec['segments'], source_path, source['video'])
     spec = master_editor.adapt(spec, source['video'], matches)
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
 
     best = None
     for iteration in range(max_iterations):
-        report('RENDER', 65 + iteration * 8, f'Rendering iteration {iteration + 1} of {max_iterations}')
+        n = iteration + 1
+        report('RENDER', 63 + iteration * 9, f'Rendering iteration {n} of {max_iterations}')
         render(spec, source_path, output_path)
-        report('QC', 72 + iteration * 8, f'Checking render iteration {iteration + 1}')
+        report('QC', 72 + iteration * 8, f'Checking render iteration {n}')
         q = qc.analyze(reference_path, output_path)
-        q['iteration'] = iteration + 1
+        q['iteration'] = n
         best = q
         if q['score'] >= 0.95:
-            report('QC_PASSED', 96, 'Quality target reached')
+            report('QC_PASSED', 96, f'Quality target reached: {q["score"]:.3f}')
             break
         patch = autocorrect.suggest(q)
         if not patch:
             report('QC_ACCEPTED', 96, 'No safe automatic correction available')
             break
-        report('AUTOCORRECT', 90, f'Applying automatic correction after iteration {iteration + 1}')
+        report('AUTOCORRECT', 90, f'Applying automatic correction after iteration {n}')
         for segment in spec['segments']:
             segment.update(patch)
 
