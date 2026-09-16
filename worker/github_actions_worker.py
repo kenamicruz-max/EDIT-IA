@@ -12,7 +12,7 @@ from botocore.config import Config
 from core.orchestrator.pipeline import run
 
 
-R2_BUCKET_DEFAULT = 'editar-ia-media'
+R2_BUCKET_DEFAULT = 'edit-ia-media'
 
 
 def now():
@@ -39,7 +39,7 @@ def normalize_endpoint():
     if '<' in hostname or '>' in hostname:
         raise RuntimeError('STORAGE_ENDPOINT contains a placeholder; use the real Cloudflare R2 endpoint')
     if not hostname.endswith('.r2.cloudflarestorage.com'):
-        match = re.search(r'([a-z0-9-]+\.r2\.cloudflarestorage\.com)', hostname)
+        match = re.search(r'([a-z0-9-]+\\.r2\\.cloudflarestorage\\.com)', hostname)
         if match:
             hostname = match.group(1)
         else:
