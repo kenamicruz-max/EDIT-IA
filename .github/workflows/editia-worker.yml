@@ -93,5 +93,39 @@ jobs:
           response=s3.list_objects_v2(Bucket=bucket,Prefix='jobs/',MaxKeys=1)
           print('R2 connection: OK'); print('R2 queue objects visible:',len(response.get('Contents',[])))
           PY
+      - name: Run end-to-end queue smoke test
+        if: ${{ github.event_name != 'schedule' }}
+        run: |
+          set -e
+          rm -rf /tmp/editia-e2e
+          mkdir -p /tmp/editia-e2e
+          ffmpeg -y -f lavfi -i "testsrc=size=320x180:rate=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 2 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/editia-e2e/reference.mp4 >/dev/null 2>&1
+          ffmpeg -y -f lavfi -i "testsrc2=size=320x180:rate=30" -f lavfi -i "sine=frequency=660:sample_rate=48000" -t 3 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/editia-e2e/source.mp4 >/dev/null 2>&1
+          python - <<'PY'
+          import json, os, subprocess, uuid
+          import boto3
+          from botocore.config import Config
+          from pathlib import Path
+          bucket=os.environ['STORAGE_BUCKET']; endpoint=os.environ['STORAGE_ENDPOINT']; access=os.environ['STORAGE_ACCESS_KEY']; secret=os.environ['STORAGE_SECRET_KEY']
+          client=boto3.client('s3',endpoint_url=endpoint,aws_access_key_id=access,aws_secret_access_key=secret,region_name='auto',config=Config(signature_version='s3v4',s3={'addressing_style':'path'}))
+          smoke=uuid.uuid4().hex
+          ref_key=f'uploads/smoke-{smoke}-reference.mp4'; src_key=f'uploads/smoke-{smoke}-source.mp4'; job_key=f'jobs/{smoke}.json'; out_key=f'outputs/{smoke}.mp4'
+          job={'id':smoke,'status':'QUEUED','stage':'QUEUED','progress':3,'detail':'End-to-end smoke test','reference':ref_key,'source':src_key,'referenceSize':Path('/tmp/editia-e2e/reference.mp4').stat().st_size,'sourceSize':Path('/tmp/editia-e2e/source.mp4').stat().st_size,'createdAt':'2026-01-01T00:00:00+00:00','version':'5.2.11'}
+          try:
+              client.upload_file('/tmp/editia-e2e/reference.mp4',bucket,ref_key,ExtraArgs={'ContentType':'video/mp4'})
+              client.upload_file('/tmp/editia-e2e/source.mp4',bucket,src_key,ExtraArgs={'ContentType':'video/mp4'})
+              client.put_object(Bucket=bucket,Key=job_key,Body=json.dumps(job).encode(),ContentType='application/json',CacheControl='no-store')
+              subprocess.run(['python','worker/github_actions_worker.py'],check=True)
+              result=json.loads(client.get_object(Bucket=bucket,Key=job_key)['Body'].read().decode())
+              if result.get('status')!='COMPLETED': raise RuntimeError(f'E2E smoke job did not complete: {result}')
+              if not result.get('outputKey') or result.get('outputKey')!=out_key: raise RuntimeError(f'Unexpected output key: {result.get("outputKey")}')
+              client.head_object(Bucket=bucket,Key=out_key)
+              print('EDIT-IA end-to-end queue smoke test: OK')
+              print('Smoke job:',smoke)
+          finally:
+              for key in (job_key,ref_key,src_key,out_key):
+                  try: client.delete_object(Bucket=bucket,Key=key)
+                  except Exception: pass
+          PY
       - name: Process queued EDIT-IA jobs
         run: python worker/github_actions_worker.py
