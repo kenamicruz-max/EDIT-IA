@@ -3,14 +3,37 @@
 import { useState } from 'react';
 
 const MAX = 500 * 1024 * 1024;
+const SESSION_LIMIT_MS = 6 * 60 * 60 * 1000;
 function sizeLabel(size: number) { return `${(size / 1024 / 1024).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`; }
+function stageLabel(stage: string | null, status: string | null) {
+  if (status === 'QUEUED') return 'Na fila do worker gratuito — aguardando processamento...';
+  if (status === 'COMPLETED') return 'Edit concluído. O vídeo final está pronto.';
+  if (status === 'FAILED' || status === 'CANCELED') return 'O processamento terminou com erro.';
+  const labels: Record<string, string> = {
+    STARTING: 'Iniciando o worker...', DOWNLOADING: 'Baixando os vídeos para processamento...',
+    ANALYZING: 'Analisando referência e vídeo fonte...', AUDIO_REFERENCE: 'Analisando áudio da referência...',
+    VIDEO_REFERENCE: 'Analisando vídeo da referência...', AUDIO_SOURCE: 'Analisando áudio do vídeo fonte...',
+    VIDEO_SOURCE: 'Analisando vídeo fonte...', REFERENCE_EFFECTS: 'Analisando efeitos da referência...',
+    SOURCE_EFFECTS: 'Analisando efeitos do vídeo fonte...', REFERENCE_TRANSITIONS: 'Analisando transições da referência...',
+    SOURCE_TRANSITIONS: 'Analisando transições do vídeo fonte...', REFERENCE_TEXT: 'Analisando textos e overlays da referência...',
+    SOURCE_TEXT: 'Analisando textos e overlays do vídeo fonte...', REFERENCE_VISION: 'Analisando composição e visão da referência...',
+    SOURCE_VISION: 'Analisando composição e visão do vídeo fonte...', REFERENCE_COLOR: 'Analisando cor da referência...',
+    SOURCE_COLOR: 'Analisando cor do vídeo fonte...', REFERENCE_MOTION: 'Analisando movimento da referência...',
+    SOURCE_MOTION: 'Analisando movimento do vídeo fonte...', MASTER_SPEC: 'Construindo a especificação do edit...',
+    COLOR_MATCH: 'Comparando e ajustando o look...', SOURCE_MATCH: 'Encontrando os melhores momentos do vídeo fonte...',
+    RENDER: 'Renderizando o edit...', QC: 'Verificando o resultado...', AUTOCORRECT: 'Aplicando correções automáticas...',
+    QC_PASSED: 'Controle de qualidade aprovado.', QC_ACCEPTED: 'Controle de qualidade concluído.', UPLOADING: 'Enviando o MP4 final...'
+  };
+  return labels[stage || ''] || 'Processando o edit...';
+}
 
 async function upload(file: File) {
   if (file.type !== 'video/mp4' && !file.name.toLowerCase().endsWith('.mp4')) throw new Error('Use arquivos MP4.');
   if (!file.size || file.size > MAX) throw new Error('Cada vídeo deve ter no máximo 500 MB.');
   const response = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: file.name, size: file.size, type: 'video/mp4' }) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Não foi possível preparar o upload.');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Não foi possível preparar o upload de ${file.name}.`);
+  if (!data.url || !data.key) throw new Error(`O servidor não devolveu os dados de upload para ${file.name}.`);
   const put = await fetch(data.url, { method: 'PUT', headers: { 'content-type': 'video/mp4' }, body: file });
   if (!put.ok) throw new Error(`Falha no upload de ${file.name}.`);
   return data.key as string;
@@ -27,26 +50,40 @@ export default function Page() {
 
   async function create() {
     if (!reference || !source || busy) return;
-    setBusy(true); setError(''); setOutput(null); setProgress(8);
+    setBusy(true); setError(''); setOutput(null); setProgress(2);
     try {
       setStatus('Enviando os vídeos com segurança...');
       const [referenceKey, sourceKey] = await Promise.all([upload(reference), upload(source)]);
-      setProgress(24);
+      setProgress(3);
       const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reference: referenceKey, source: sourceKey, referenceSize: reference.size, sourceSize: source.size }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Não foi possível criar o job.');
-      setStatus('Analisando referência e vídeo fonte...'); setProgress(32);
-      for (let i = 0; i < 4320; i++) {
-        await new Promise(resolve => setTimeout(resolve, 5000));
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.id) throw new Error(data.error || 'Não foi possível criar o job.');
+      setStatus('Job criado. Aguardando o worker...');
+
+      const started = Date.now();
+      let consecutiveStatusErrors = 0;
+      while (Date.now() - started < SESSION_LIMIT_MS) {
         const stateResponse = await fetch(`/api/jobs/${data.id}`, { cache: 'no-store' });
-        if (!stateResponse.ok) continue;
-        const state = await stateResponse.json();
-        if (state.status === 'QUEUED') { setStatus('Na fila do worker gratuito...'); setProgress(Math.max(32, Math.min(48, 32 + i / 120))); }
-        else if (state.status === 'RUNNING') { setStatus('Reconstruindo cortes, ritmo, movimento e aparência...'); setProgress(Math.max(48, Math.min(92, 48 + i / 120))); }
-        else if (state.status === 'COMPLETED') { setOutput(state.output); setProgress(100); setStatus('Edit concluído. O vídeo final está pronto.'); return; }
-        else if (state.status === 'FAILED' || state.status === 'CANCELED') throw new Error(state.error || `O job terminou com status ${state.status}.`);
+        if (!stateResponse.ok) {
+          const body = await stateResponse.json().catch(() => ({}));
+          if (stateResponse.status === 404) throw new Error(body.error || 'O job não foi encontrado na fila.');
+          consecutiveStatusErrors += 1;
+          setStatus(`Aguardando resposta do servidor... (${consecutiveStatusErrors}/3)`);
+          if (consecutiveStatusErrors >= 3) throw new Error(body.error || 'Não foi possível consultar o estado do processamento.');
+        } else {
+          consecutiveStatusErrors = 0;
+          const state = await stateResponse.json();
+          const serverProgress = Number(state.progress);
+          if (Number.isFinite(serverProgress)) setProgress(Math.max(3, Math.min(100, serverProgress)));
+          setStatus(state.detail || stageLabel(state.stage, state.status));
+          if (state.status === 'QUEUED') setProgress(Math.max(3, Number.isFinite(serverProgress) ? serverProgress : 3));
+          else if (state.status === 'RUNNING') setProgress(Math.max(4, Number.isFinite(serverProgress) ? serverProgress : 4));
+          else if (state.status === 'COMPLETED') { setOutput(state.output); setProgress(100); setStatus('Edit concluído. O vídeo final está pronto.'); return; }
+          else if (state.status === 'FAILED' || state.status === 'CANCELED') throw new Error(state.error || `O job terminou com status ${state.status}.`);
+        }
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
-      throw new Error('O processamento demorou mais do que o limite de espera desta sessão. O job continua no servidor; tente consultar novamente.');
+      throw new Error('Esta sessão deixou de esperar pelo job. O processamento pode continuar no servidor; atualize a página para consultar novamente.');
     } catch (e) { setError(e instanceof Error ? e.message : 'Erro inesperado.'); setStatus('Não foi possível concluir o processamento.'); }
     finally { setBusy(false); }
   }
