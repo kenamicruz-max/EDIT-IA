@@ -43,10 +43,33 @@ jobs:
           cache-dependency-path: worker/requirements.txt
       - name: Install Python dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r worker/requirements.txt
+      - name: Validate EDIT-IA pipeline imports
+        run: |
+          python -m py_compile core/orchestrator/pipeline.py core/render/ffmpeg_renderer.py worker/github_actions_worker.py
+          python - <<'PY'
+          from core.orchestrator.pipeline import run
+          from core.render.ffmpeg_renderer import render
+          print('EDIT-IA pipeline imports: OK')
+          print('EDIT-IA renderer imports: OK')
+          PY
+      - name: Run local render smoke test
+        run: |
+          set -e
+          mkdir -p /tmp/editia-smoke
+          ffmpeg -y -f lavfi -i "testsrc=size=320x180:rate=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 2 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/editia-smoke/reference.mp4 >/dev/null 2>&1
+          ffmpeg -y -f lavfi -i "testsrc2=size=320x180:rate=30" -f lavfi -i "sine=frequency=660:sample_rate=48000" -t 3 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/editia-smoke/source.mp4 >/dev/null 2>&1
+          python - <<'PY'
+          from core.orchestrator.pipeline import run
+          result = run('/tmp/editia-smoke/reference.mp4', '/tmp/editia-smoke/source.mp4', '/tmp/editia-smoke/output.mp4', max_iterations=1)
+          assert result.get('output')
+          print('EDIT-IA render smoke test: OK')
+          print('QC:', result.get('qc'))
+          PY
+          test -s /tmp/editia-smoke/output.mp4
       - name: Verify R2 connection
         run: |
           python - <<'PY'
-          import os,re,hashlib
+          import os,hashlib
           from urllib.parse import urlparse
           import boto3
           from botocore.config import Config
