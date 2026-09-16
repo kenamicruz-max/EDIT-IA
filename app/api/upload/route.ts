@@ -1,44 +1,13 @@
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { storageConfig } from '../../../lib/r2';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const DEFAULT_BUCKET = 'edit-ia-media';
 const MAX = 500 * 1024 * 1024;
-const safeEnv = (name: string) => process.env[name]?.trim().replace(/^['\"]|['\"]$/g, '') || '';
-
-function storage() {
-  const endpointRaw = safeEnv('STORAGE_ENDPOINT');
-  const accessKey = safeEnv('STORAGE_ACCESS_KEY');
-  const secretKey = safeEnv('STORAGE_SECRET_KEY');
-  const bucket = safeEnv('STORAGE_BUCKET') || DEFAULT_BUCKET;
-  const missing = [
-    ['STORAGE_ENDPOINT', endpointRaw],
-    ['STORAGE_ACCESS_KEY', accessKey],
-    ['STORAGE_SECRET_KEY', secretKey],
-  ].filter(([, value]) => !value).map(([name]) => name);
-
-  if (missing.length) {
-    const error = new Error(`Missing storage configuration: ${missing.join(', ')}`);
-    (error as Error & { code?: string }).code = 'STORAGE_NOT_CONFIGURED';
-    throw error;
-  }
-
-  // R2's documented S3 endpoint is used directly. Remove accidental trailing
-  // slashes so the SDK signs exactly the same canonical endpoint every time.
-  const endpoint = (/^https?:\/\//i.test(endpointRaw) ? endpointRaw : `https://${endpointRaw}`).replace(/\/+$/, '');
-  return {
-    bucket,
-    client: new S3Client({
-      region: safeEnv('STORAGE_REGION') || 'auto',
-      endpoint,
-      credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
-    }),
-  };
-}
 
 function fail(message: string, status: number, code?: string) {
   return NextResponse.json(
@@ -61,12 +30,16 @@ export async function POST(req: Request) {
       return fail('Solo se aceptan archivos MP4.', 400, 'INVALID_FILE_TYPE');
     }
 
-    const { client, bucket } = storage();
+    const { client, bucket } = storageConfig();
     const safeName = name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120) || 'video.mp4';
     const key = `uploads/${crypto.randomUUID()}-${safeName}`;
     const url = await getSignedUrl(
       client,
-      new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: 'video/mp4' }),
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: 'video/mp4',
+      }),
       { expiresIn: 900 },
     );
 
@@ -79,6 +52,9 @@ export async function POST(req: Request) {
     console.error('upload preparation failed', error);
     if (code === 'STORAGE_NOT_CONFIGURED') {
       return fail('El almacenamiento R2 aún no está configurado en las variables de entorno del servidor.', 503, code);
+    }
+    if (code === 'STORAGE_ENDPOINT_INVALID') {
+      return fail('El endpoint de R2 no es válido. Debe ser el endpoint S3 de tu cuenta de Cloudflare R2.', 503, code);
     }
     return fail('No se pudo preparar la subida. Comprueba el endpoint, bucket y credenciales de R2.', 503, 'STORAGE_UNAVAILABLE');
   }
